@@ -5,9 +5,12 @@
 #include <string.h>
 #include <pthread.h>
 #include <sched.h> // for CPU scheduling
+#include <errno.h>
+#include <time.h>
 
 int thread_amount;
 float time_wait; // -t
+double time_wait_ns;
 int CPU_ID = 0; // which cpu threads run on
 cpu_set_t cpuset;
 
@@ -20,10 +23,10 @@ typedef struct {
     int sched_priority; // -p
 } thread_info_t;
 
-typedef struct // we only need priority when using 'pthread_attr_setschedparam'
+/*typedef struct // we only need priority when using 'pthread_attr_setschedparam'
 {
     int32_t  sched_priority;
-    /*int32_t  sched_curpriority;
+    int32_t  sched_curpriority;
     union
     {
         int32_t  reserved[8];
@@ -34,17 +37,18 @@ typedef struct // we only need priority when using 'pthread_attr_setschedparam'
             struct timespec     __ss_repl_period;  
             struct timespec     __ss_init_budget;  
         }           __ss;  
-    }           __ss_un;   */
-}sched_param;
+    }           __ss_un;   
+}sched_param;*/
 
 void *thread_func(void *arg);
 
 int main(int argc, char *argv[]){
     int opt, count;
     char *token;
+    int error;
     thread_info_t *thread_info;
     pthread_attr_t *thread_attr;
-    sched_param *sched_params; // store scheduling parameters
+    struct sched_param *sched_params; // store scheduling parameters
 
     CPU_ZERO(&cpuset);
     CPU_SET(CPU_ID, &cpuset);
@@ -55,7 +59,7 @@ int main(int argc, char *argv[]){
     }
 
 
-    printf("Main thread runs on CPU %d\n", sched_getaffinity(0, sizeof(cpuset), &cpuset));
+    //printf("Main thread runs on CPU %d\n", sched_getaffinity(0, sizeof(cpuset), &cpuset));
 
     while(1){ // parse user argements
         opt = getopt(argc, argv, "n:t:s:p:");
@@ -71,11 +75,12 @@ int main(int argc, char *argv[]){
             case 'n': // get total amount of threads
                 thread_amount = atoi(optarg);
                 thread_info = (thread_info_t*)malloc(thread_amount * sizeof(thread_info_t));
-                sched_params = (sched_param*)malloc(thread_amount * sizeof(sched_param));
+                sched_params = (struct sched_param*)malloc(thread_amount * sizeof(struct sched_param));
                 thread_attr = (pthread_attr_t*)malloc(thread_amount * sizeof(pthread_attr_t));
                 break;
             case 't': // get the duration of busy waiting
                 time_wait = (float)(atof(optarg));
+                time_wait_ns = (double)(time_wait * 1000000000);
                 break;
             case 's': // get policy
                 count = 0;
@@ -86,10 +91,10 @@ int main(int argc, char *argv[]){
                     switch (token[0])
                     {
                         case 'F':
-                            thread_info[count].sched_policy = 0;
+                            thread_info[count].sched_policy = 1;
                             break;
                         case 'N':
-                            thread_info[count].sched_policy = 1;
+                            thread_info[count].sched_policy = 0;
                             break;
                     }
                     count++;
@@ -107,7 +112,8 @@ int main(int argc, char *argv[]){
         }
     }
 
-    pthread_barrier_init(&barrier, NULL, thread_amount + 1); // initialize barrier to amounts of all threads(including main)
+    pthread_barrier_init(&barrier, NULL, thread_amount); // initialize barrier to amounts of all threads(including main)
+    //printf("min:%d, max:%d\n", sched_get_priority_min(SCHED_FIFO), sched_get_priority_max(SCHED_FIFO));
 
     for(count = 0; count < thread_amount; count++){
         thread_info[count].thread_num = count;
@@ -118,25 +124,33 @@ int main(int argc, char *argv[]){
             printf("Error while setting inheritance\n");
             return EXIT_FAILURE;
         }
-        printf("%d ", count);
+
         switch(thread_info[count].sched_policy){
-            case 0:
+            case 1:// FIFO
                 if(pthread_attr_setschedpolicy(&thread_attr[count], SCHED_FIFO)){
                     printf("Error while setting policy\n");
                     return EXIT_FAILURE;
                 }
 
-                if(pthread_attr_setschedparam(&thread_attr[count], &sched_params[count])){
-                    printf("Error while setting priority\n");
+                if(sched_params[count].sched_priority >= sched_get_priority_min(SCHED_FIFO) && sched_params[count].sched_priority <= sched_get_priority_max(SCHED_FIFO)){
+                    if(pthread_attr_setschedparam(&thread_attr[count], &sched_params[count])){
+                        printf("Error while setting priority\n");
+                        return EXIT_FAILURE;
+                    }
+                }
+                else{
+                    printf("Priority value error\n");
                     return EXIT_FAILURE;
                 }
 
                 if(pthread_create(&thread_info[count].thread_id, &thread_attr[count], thread_func, (void*)&thread_info[count].thread_num)){
                     printf("Error while creating pthread\n");
+                    printf("%d\n", sched_params[count].sched_priority);
+                    perror("pthread_create");
                     return EXIT_FAILURE;
                 }
                 break;
-            case 1: // no need to set priority
+            case 0: // not real-time, no need to set priority
                 if(pthread_attr_setschedpolicy(&thread_attr[count], SCHED_OTHER)){
                     printf("Error while setting policy\n");
                     return EXIT_FAILURE;
@@ -152,11 +166,12 @@ int main(int argc, char *argv[]){
         //pthread_join(thread_info[count].thread_id, NULL);
     } 
 
-    pthread_barrier_wait(&barrier); // release untill all threads(including main) arrives
-    pthread_barrier_destroy(&barrier); // main continue executing
+    //pthread_barrier_wait(&barrier); // release untill all threads(including main) arrives
 
     for(count = 0; count < thread_amount; count++)
         pthread_join(thread_info[count].thread_id, NULL);
+
+    pthread_barrier_destroy(&barrier); // main continue executing
         
     /*printf("%d, %f\n", thread_amount, time_wait);
     for(count = 0; count < thread_amount; count++)
@@ -167,6 +182,8 @@ int main(int argc, char *argv[]){
 
 void *thread_func(void *arg)
 {
+    struct timespec t1,t2;
+
     if(pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset))
         printf("Faild to set thread%d CPU affinity" ,*((int*) arg));
     /* 1. Wait until all threads are ready */
@@ -175,7 +192,14 @@ void *thread_func(void *arg)
     for (int i = 0; i < 3; i++) {
         printf("Thread %d is running\n", *((int*) arg));
         /* Busy for <time_wait> seconds */
+        clock_gettime(CLOCK_REALTIME, &t1);
+        while(1){
+            clock_gettime(CLOCK_REALTIME, &t2);
+            if((t2.tv_nsec - t1.tv_nsec) >= time_wait_ns)
+                break;
+        }
     }
-    printf("Thread %d runs on CPU %d\n",*((int*) arg), pthread_getaffinity_np(pthread_self(), sizeof(cpuset), &cpuset));
+    //printf("Thread %d runs on CPU %d\n",*((int*) arg), pthread_getaffinity_np(pthread_self(), sizeof(cpuset), &cpuset));
     /* 3. Exit the function  */
+    pthread_exit(NULL);
 }
