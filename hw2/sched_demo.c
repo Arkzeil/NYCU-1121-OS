@@ -38,7 +38,10 @@ int main(int argc, char *argv[]){
                 break;
             case 's':
                 count = 0;
-                while((token = strtok(optarg, ",")) != NULL){
+                //printf("%s\n", optarg);
+                token = strtok(optarg, ",");
+                do{
+                    //printf("%s ", token);
                     switch (token[0])
                     {
                         case 'F':
@@ -49,21 +52,23 @@ int main(int argc, char *argv[]){
                             break;
                     }
                     count++;
-                }
+                }while((token = strtok(NULL, ",")) != NULL);
                 break;
             case 'p':
                 count = 0;
-                while((token = strtok(optarg, ",")) != NULL){
+                //printf("%s\n", optarg);
+                token = strtok(optarg, ",");
+                do{
                     thread_info[count].sched_priority = atoi(token);
                     count++;
-                }
+                }while((token = strtok(NULL, ",")) != NULL);
                 break;
         }
     }
 
-    printf("%d, %f\n", thread_amount, time_wait);
+    /*printf("%d, %f\n", thread_amount, time_wait);
     for(count = 0; count < thread_amount; count++)
-        printf("%d %d\n", thread_info[count].sched_policy, thread_info[count].sched_priority);
+        printf("%d %d\n", thread_info[count].sched_policy, thread_info[count].sched_priority);*/
 
     return 0;
 }
