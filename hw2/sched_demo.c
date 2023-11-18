@@ -10,10 +10,10 @@
 
 int thread_amount;
 float time_wait; // -t
-double time_wait_ns;
 int CPU_ID = 0; // which cpu threads run on
 cpu_set_t cpuset;
 
+//pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_barrier_t barrier; // set barrier that all threads are complete can they start execute
 
 typedef struct {
@@ -80,7 +80,6 @@ int main(int argc, char *argv[]){
                 break;
             case 't': // get the duration of busy waiting
                 time_wait = (float)(atof(optarg));
-                time_wait_ns = (double)(time_wait * 1000000000);
                 break;
             case 's': // get policy
                 count = 0;
@@ -183,22 +182,27 @@ int main(int argc, char *argv[]){
 void *thread_func(void *arg)
 {
     struct timespec t1,t2;
+    double ts1, ts2;
 
     if(pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset))
         printf("Faild to set thread%d CPU affinity" ,*((int*) arg));
     /* 1. Wait until all threads are ready */
     pthread_barrier_wait(&barrier);
+    //pthread_mutex_lock(&mutex);
     /* 2. Do the task */ 
     for (int i = 0; i < 3; i++) {
         printf("Thread %d is running\n", *((int*) arg));
         /* Busy for <time_wait> seconds */
-        clock_gettime(CLOCK_REALTIME, &t1);
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
+        ts1 = t1.tv_sec + 1e-9 * t1.tv_nsec;
         while(1){
-            clock_gettime(CLOCK_REALTIME, &t2);
-            if((t2.tv_nsec - t1.tv_nsec) >= time_wait_ns)
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t2);
+            ts2 = t2.tv_sec + 1e-9 * t2.tv_nsec;
+            if((ts2 - ts1) >= time_wait)
                 break;
         }
     }
+    //pthread_mutex_unlock(&mutex);
     //printf("Thread %d runs on CPU %d\n",*((int*) arg), pthread_getaffinity_np(pthread_self(), sizeof(cpuset), &cpuset));
     /* 3. Exit the function  */
     pthread_exit(NULL);
