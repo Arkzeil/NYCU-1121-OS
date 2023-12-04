@@ -4,16 +4,40 @@
 #include <linux/fs.h>           // The 'file_operations' structure is defined here, also register
 #include <linux/module.h>       // for the module usage monitoring
 #include <linux/cdev.h>
+#include <linux/mutex.h>
+#include <linux/utsname.h>      // to get the hostname
 
-#include <kfetch.h>
 
 MODULE_LICENSE("Dual BSD/GPL"); // free licence. kernel would complain without this line
 
 dev_t dev;
 struct cdev my_dev;
-static int major;               // major device number
+static unsigned int major;                       // major device number
+static struct class *dev_cls;           // for class of devices
+static unsigned char kfetch_mask = 0;    // for driver mask that can be used after a invocation
+//struct mutex kfetch_mutex;
+
+static DEFINE_MUTEX(kfetch_mutex);    // define mutex loc gloablly and statically
 
 #define DEVICE_NAME "kfetch"
+#define BUFFER_SIZE 1024
+
+#define KFETCH_NUM_INFO 6
+// Preprocessor macro
+#define KFETCH_RELEASE   (1 << 0)
+#define KFETCH_NUM_CPUS  (1 << 1)
+#define KFETCH_CPU_MODEL (1 << 2)
+#define KFETCH_MEM       (1 << 3)
+#define KFETCH_UPTIME    (1 << 4)
+#define KFETCH_NUM_PROCS (1 << 5)
+
+#define KFETCH_FULL_INFO ((1 << KFETCH_NUM_INFO) - 1)
+
+static int kfetch_open(struct inode *, struct file *); 
+static int kfetch_release(struct inode *, struct file *); 
+static ssize_t kfetch_read(struct file *, char __user *, size_t, loff_t *); 
+static ssize_t kfetch_write(struct file *, const char __user *, size_t, loff_t *); 
+
 // A C99 way of assigning to elements of a structure that makes assigning to this structure more convenient.
 // C99 help with compatibility compared to GNU
 // Any member of the structure which you do not explicitly assign will be initialized to NULL
@@ -34,7 +58,7 @@ static int kfetch_init(void){
         return -1;
     }
 
-    major = MAJOR(dev)
+    major = MAJOR(dev);
     printk(KERN_INFO "Device major number: %d", major);
 
     cdev_init(&my_dev, &kfetch_ops);         // initialize the data structure struct cdev for our char device and associate it with the device numbers.
@@ -44,8 +68,16 @@ static int kfetch_init(void){
         return -1;
     }
 
-    cls = class_create(THIS_MODULE, DEVICE_NAME);
-    device_create(cls, NULL, MKDEV(major, 0), NULL, DEVICE_NAME); 
+    dev_cls = class_create(THIS_MODULE, DEVICE_NAME); // create a new class of devices, for management
+    if(IS_ERR(dev_cls)){
+        printk(KERN_ERR "Error while creating device class");
+        return -1;
+    }
+
+    if(IS_ERR(device_create(dev_cls, NULL, MKDEV(major, 0), NULL, DEVICE_NAME))){ // dynamically create a device node in the /dev directory associated with a specific class
+        printk(KERN_ERR "Error while creating device");
+        return -1;
+    } 
 
     return 0;
 }
@@ -54,19 +86,29 @@ static void kfetch_exit(void){
     if(module_refcount(THIS_MODULE) > 0)
         printk(KERN_ERR "Error: there're still processes using this module");
 
-    device_destroy(cls, MKDEV(major, 0)); 
-    class_destroy(cls);
+    device_destroy(dev_cls, MKDEV(major, 0)); 
+    class_destroy(dev_cls);
     unregister_chrdev(major, DEVICE_NAME);
     
     printk(KERN_ALERT "Goodbye, cruel world\n");
 }
 
-static void kfetch_open(){
+static int kfetch_open(struct inode *inode, struct file *file){
+    mutex_lock(&kfetch_mutex); //only one process can use this device at a time
+    // critical section
+    // Increment the usage count
+    try_module_get(THIS_MODULE);
 
+    return 0;
 }
 
-static void kfetch_release(){
+static int kfetch_release(struct inode *inode, struct file *file){
 
+    // end of critical section
+    mutex_unlock(&kfetch_mutex);
+
+    module_put(THIS_MODULE);    // Decrement the usage count
+    return 0;
 }
 
 static ssize_t kfetch_read(struct file *filp,
@@ -74,13 +116,27 @@ static ssize_t kfetch_read(struct file *filp,
                            size_t length,
                            loff_t *offset)
 {
+    char kfetch_buf[BUFFER_SIZE] = "Test\n";
+    size_t len;
+
+    if(*offset >= BUFFER_SIZE)  // had read to the end of buffer
+        return 0;
+    
+    if(length > BUFFER_SIZE - *offset) // read only to the end of buffer
+        len = BUFFER_SIZE - *offset;
+    else 
+        len = length;
     /* fetching the information */
+    
+    printk("hostname: %s\n", utsname()->nodename);
+    printk("hostname: %s\n", utsname()->release);
 
     if (copy_to_user(buffer, kfetch_buf, len)) {
         pr_alert("Failed to copy data to user");
         return 0;
     }
     
+    return 0;
     /* cleaning up */
 }
 
@@ -97,7 +153,26 @@ static ssize_t kfetch_write(struct file *filp,
     }
 
     /* setting the information mask */
+    if(mask_info & KFETCH_FULL_INFO){
+        kfetch_mask |= KFETCH_FULL_INFO;
+        return sizeof(kfetch_mask);
+    }
+    
+    if(mask_info & KFETCH_RELEASE)
+        kfetch_mask |= KFETCH_RELEASE;
+    if(mask_info & KFETCH_NUM_CPUS)
+        kfetch_mask |= KFETCH_NUM_CPUS;
+    if(mask_info & KFETCH_CPU_MODEL)
+        kfetch_mask |= KFETCH_CPU_MODEL;
+    if(mask_info & KFETCH_MEM)
+        kfetch_mask |= KFETCH_MEM;
+    if(mask_info & KFETCH_UPTIME)
+        kfetch_mask |= KFETCH_UPTIME;
+    if(mask_info & KFETCH_NUM_PROCS)
+        kfetch_mask |= KFETCH_NUM_PROCS;
+
+    return sizeof(kfetch_mask);
 }
 
-module_init(hello_init); //loading module
-module_exit(hello_exit); //removing module)
+module_init(kfetch_init); //loading module
+module_exit(kfetch_exit); //removing module)
