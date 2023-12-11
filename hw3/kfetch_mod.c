@@ -10,7 +10,12 @@
 #include <linux/smp.h>          // to get cpu info
 #include <linux/cpumask.h>      // to get cpu amount
 #include <linux/sched/stat.h>   // to get the number of processes
+#include <linux/sys.h>
+#include <linux/sched.h>        // for task_struct
 #include <linux/ktime.h>        // to get the uptime
+#include <linux/kernel.h>
+#include <linux/sched/signal.h> // for 'for_each_process_thread'
+#include <linux/kprobes.h>
 
 
 MODULE_LICENSE("Dual BSD/GPL"); // free licence. kernel would complain without this line
@@ -84,7 +89,7 @@ static int kfetch_init(void){
         return -1;
     } 
 
-    struct sysinfo mem_info;
+    /*struct sysinfo mem_info;
     uint32_t kb_unit;           // for the conversion from byte to MB
     int cpu;                    // to store the cpu id
     struct cpuinfo_x86 *CPU_info;
@@ -106,10 +111,10 @@ static int kfetch_init(void){
     
     printk("CPUs: %d / %d", num_online_cpus(), num_active_cpus());
 
-    //printk("Procs: %d", nr_threads);
+    printk("Procs: %d", nr_threads);
 
     uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC);
-    printk("Uptime: %lld", uptime / 60);
+    printk("Uptime: %lld", uptime / 60);*/
 
     return 0;
 }
@@ -148,6 +153,14 @@ static ssize_t kfetch_read(struct file *filp,
                            size_t length,
                            loff_t *offset)
 {
+    /*char logo[] = " 
+        .-.        
+       (.. |       
+       <>  |       
+      / --- \\      
+     ( |   | |     
+   |\\_)___/\\)/\\   
+  <__)------(__/ ";*/
     char kfetch_buf[BUFFER_SIZE] = "Test\n";
     size_t len;
     struct sysinfo mem_info;
@@ -164,27 +177,44 @@ static ssize_t kfetch_read(struct file *filp,
     else 
         len = length;
     /* fetching the information */
-    
     printk("%s", utsname()->nodename);
     printk("--------------");
-    printk("Kernel: %s", utsname()->release);
 
-    si_meminfo(&mem_info);  // get all kinds of memory usage in pages
-    kb_unit = mem_info.mem_unit / 1024; // byte -> MB
-
-    printk("Total RAM: %ld MB / %ld MB", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+    /*if(kfetch_mask & KFETCH_FULL_INFO){
+        
+    }*/
     
-    //for_each_online_cpu(cpu)
-    cpu = smp_processor_id(); // obtain CPU number
-    CPU_info = &cpu_data(cpu);
-    printk("CPU: %s", CPU_info->x86_model_id);
-    
-    printk("CPUs: %d / %d", num_online_cpus(), num_active_cpus());
+    if(kfetch_mask & KFETCH_RELEASE){
+        printk("Kernel: %s", utsname()->release);
+    }
+    if(kfetch_mask & KFETCH_NUM_CPUS){
+        printk("CPUs: %d / %d", num_online_cpus(), num_active_cpus());
+    }
+    if(kfetch_mask & KFETCH_CPU_MODEL){
+        //for_each_online_cpu(cpu)
+        cpu = smp_processor_id(); // obtain CPU number
+        CPU_info = &cpu_data(cpu);
+        printk("CPU: %s", CPU_info->x86_model_id);
+    }
+    if(kfetch_mask & KFETCH_MEM){
+        si_meminfo(&mem_info);  // get all kinds of memory usage in pages
+        kb_unit = mem_info.mem_unit / 1024; // byte -> KB, can't conver to MB directly since it's the byte of page, which is probably 1024 or 2048. Converting to MB will leads to 0
 
-    //printk("Procs: %d", nr_threads);
-
-    uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC);
-    printk("Uptime: %lld", uptime / 60);
+        printk("Total RAM: %ld MB / %ld MB", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+    }
+    if(kfetch_mask & KFETCH_UPTIME){
+        uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC); // get the time from booting in ns, convert to seconds
+        printk("Uptime: %lld", uptime / 60);                             // convert to minutes
+    }
+    if(kfetch_mask & KFETCH_NUM_PROCS){
+        struct task_struct *p, *t;
+        int count = 0;
+        //printk("Procs: %d", nr_processes);
+        for_each_process_thread(p, t){
+            count++;
+        }
+        printk("Procs: %d", count);
+    }
 
     if (copy_to_user(buffer, kfetch_buf, len)) {
         pr_alert("Failed to copy data to user");
