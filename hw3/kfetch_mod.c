@@ -95,33 +95,6 @@ static int kfetch_init(void){
         return -1;
     } 
 
-    /*struct sysinfo mem_info;
-    uint32_t kb_unit;           // for the conversion from byte to MB
-    int cpu;                    // to store the cpu id
-    struct cpuinfo_x86 *CPU_info;
-    s64 uptime;                // signed 64 bits
-
-    printk("%s", utsname()->nodename);
-    printk("--------------");
-    printk("Kernel: %s", utsname()->release);
-
-    si_meminfo(&mem_info);  // get all kinds of memory usage in pages
-    kb_unit = mem_info.mem_unit / 1024; // byte -> KB, can't conver to MB directly since it's the byte of page, which is probably 1024 or 2048. Converting to MB will leads to 0
-
-    printk("Total RAM: %ld MB / %ld MB", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
-    
-    //for_each_online_cpu(cpu)
-    cpu = smp_processor_id(); // obtain CPU number
-    CPU_info = &cpu_data(cpu);
-    printk("CPU: %s", CPU_info->x86_model_id);
-    
-    printk("CPUs: %d / %d", num_online_cpus(), num_active_cpus());
-
-    printk("Procs: %d", nr_threads);
-
-    uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC);
-    printk("Uptime: %lld", uptime / 60);*/
-
     return 0;
 }
 
@@ -161,8 +134,9 @@ static ssize_t kfetch_read(struct file *filp,
                            size_t length,
                            loff_t *offset)
 {
-    //char *kfetch_buf = kmalloc(BUFFER_SIZE, GFP_KERNEL);
-    char kfetch_buf[] = "Test\n";
+    char *kfetch_buf = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    char *str_temp = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    //char kfetch_buf[] = "Test\n";
     size_t len;
     struct sysinfo mem_info;
     uint32_t kb_unit;           // for the conversion from byte to MB
@@ -190,34 +164,78 @@ static ssize_t kfetch_read(struct file *filp,
     /* fetching the information */
     printk("%s\n", utsname()->nodename);
     printk("-------------\n");
-    
+
+    sprintf(kfetch_buf, "%*s%s\n", 19, " ", utsname()->nodename);
+
+    sprintf(str_temp, "%*s", 9, ".-.");
+    strcat(kfetch_buf, str_temp);
+    sprintf(str_temp, "%*s%s\n", 10, " ", "-------------");
+    strcat(kfetch_buf, str_temp);
 
     /*if(kfetch_mask & KFETCH_FULL_INFO){
         
     }*/
-    
+    sprintf(str_temp, "%*s", 10, "(.. |");
+    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_RELEASE){
         printk("Kernel: %s\n", utsname()->release);
+        sprintf(str_temp, "%*s%s", 8, " ", utsname()->release);
+        strcat(kfetch_buf, str_temp);
     }
+    sprintf(str_temp, "\n");
+    strcat(kfetch_buf, str_temp);
+
+    sprintf(str_temp, "%*s", 10, "<>  |");
+    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_NUM_CPUS){
         printk("CPUs: %d / %d\n", num_online_cpus(), num_active_cpus());
+        sprintf(str_temp, "%*sCPUs: %d / %d", 8, " ", num_online_cpus(), num_active_cpus());
+        strcat(kfetch_buf, str_temp);
     }
+    sprintf(str_temp, "\n");
+    strcat(kfetch_buf, str_temp);
+
+    sprintf(str_temp, "%*s", 11, "/ --- \\");
+    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_CPU_MODEL){
         //for_each_online_cpu(cpu)
         cpu = smp_processor_id(); // obtain CPU number
         CPU_info = &cpu_data(cpu);
         printk("CPU: %s\n", CPU_info->x86_model_id);
+        sprintf(str_temp, "%*sCPU: %s", 8, " ", CPU_info->x86_model_id);
+        strcat(kfetch_buf, str_temp);
     }
+    sprintf(str_temp, "\n");
+    strcat(kfetch_buf, str_temp);
+
+    sprintf(str_temp, "%*s", 12, "( |   | |");
+    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_MEM){
         si_meminfo(&mem_info);  // get all kinds of memory usage in pages
         kb_unit = mem_info.mem_unit / 1024; // byte -> KB, can't conver to MB directly since it's the byte of page, which is probably 1024 or 2048. Converting to MB will leads to 0
 
-        printk("Total RAM: %ld MB / %ld MB\n", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        // “free memory” is memory which is literally doing nothing whatever right now. But “available memory” is memory that you can use - but may require the operating system to free something up in order to give it to you
+        //printk("Total RAM: %ld MB / %ld MB\n", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        printk("Total RAM: %ld MB / %ld MB\n", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        sprintf(str_temp, "%*sTotal RAM: %ld MB / %ld MB", 8, " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        strcat(kfetch_buf, str_temp);
     }
+    sprintf(str_temp, "\n");
+    strcat(kfetch_buf, str_temp);
+
+    sprintf(str_temp, "%*s", 14, "|\\\\_)___/\\)/\\");
+    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_UPTIME){
         uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC); // get the time from booting in ns, convert to seconds
         printk("Uptime: %lld\n", uptime / 60);                             // convert to minutes
+        sprintf(str_temp, "%*sCUptime: %lld", 8, " ", uptime / 60);
+        strcat(kfetch_buf, str_temp);
     }
+    sprintf(str_temp, "\n");
+    strcat(kfetch_buf, str_temp);
+
+    sprintf(str_temp, "%*s", 13, "<__)------(__/");
+    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_NUM_PROCS){
         struct task_struct *p, *t;
         int count = 0;
@@ -226,16 +244,21 @@ static ssize_t kfetch_read(struct file *filp,
             count++;
         }
         printk("Procs: %d\n", count);
+        sprintf(str_temp, "%*sProcs: %d", 8, " ", count);
+        strcat(kfetch_buf, str_temp);
     }
+    sprintf(str_temp, "\n");
+    strcat(kfetch_buf, str_temp);
+
     mutex_unlock(&RW_mutex);
 
     printk("%zd\n", len);
-    if (copy_to_user(buffer, logo, strlen(logo + 1))) {
+    if (copy_to_user(buffer, kfetch_buf, strlen(kfetch_buf + 1))) {
         pr_alert("Failed to copy data to user");
         return 0;
     }
     
-    return strlen(logo + 1);
+    return strlen(kfetch_buf + 1);
     /* cleaning up */
 }
 
@@ -260,7 +283,7 @@ static ssize_t kfetch_write(struct file *filp,
     //printk("mask info:%d\n", mask_info);
 
     /* setting the information mask */
-    if((mask_info & KFETCH_FULL_INFO) == KFETCH_FULL_INFO){
+    if((mask_info & KFETCH_FULL_INFO) == KFETCH_FULL_INFO){ // don't directly use 'and' to determine since result will not be 0
         kfetch_mask |= KFETCH_FULL_INFO;
         mutex_unlock(&RW_mutex);
         return sizeof(kfetch_mask);
