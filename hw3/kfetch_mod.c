@@ -35,7 +35,7 @@ static DEFINE_MUTEX(RW_mutex);        // define mutex lock gloablly and statical
 #define DEVICE_NAME "kfetch"
 #define BUFFER_SIZE 1024
 
-#define KFETCH_NUM_INFO 6
+#define KFETCH_NUM_INFO 7
 // Preprocessor macro
 #define KFETCH_RELEASE   (1 << 0)
 #define KFETCH_NUM_CPUS  (1 << 1)
@@ -50,6 +50,8 @@ static int kfetch_open(struct inode *, struct file *);
 static int kfetch_release(struct inode *, struct file *); 
 static ssize_t kfetch_read(struct file *, char __user *, size_t, loff_t *); 
 static ssize_t kfetch_write(struct file *, const char __user *, size_t, loff_t *); 
+void fill_info(char *out_str, char **in_str, int amount);
+void pass(void){}
 
 // A C99 way of assigning to elements of a structure that makes assigning to this structure more convenient.
 // C99 help with compatibility compared to GNU
@@ -65,7 +67,7 @@ const static struct file_operations kfetch_ops = {
 static int kfetch_init(void){
     printk(KERN_ALERT "hello world!\n");
 
-    //sema_init(&kfetch_semaphore, 1);  // Initialize semaphore with an initial count of 1
+    //sema_init(&kfetch_semaphore, 1);  // Initialize semaphore with an initial info_count of 1
     //sema_init(&RW_semaphore, 1);
 
     if(alloc_chrdev_region(&dev, 0, 1, DEVICE_NAME) < 0){ // get dynamic major number(stored in dev) ,and assign 1 minor number starting from 0
@@ -113,7 +115,7 @@ static int kfetch_open(struct inode *inode, struct file *file){
     mutex_lock(&kfetch_mutex); //only one process can use this device at a time
     //down(&kfetch_semaphore);  // Acquire semaphore
     // critical section
-    // Increment the usage count
+    // Increment the usage info_count
     try_module_get(THIS_MODULE);
 
     return 0;
@@ -125,7 +127,7 @@ static int kfetch_release(struct inode *inode, struct file *file){
     mutex_unlock(&kfetch_mutex);
     //up(&kfetch_semaphore);  // Release semaphore
 
-    module_put(THIS_MODULE);    // Decrement the usage count
+    module_put(THIS_MODULE);    // Decrement the usage info_count
     return 0;
 }
 
@@ -135,7 +137,7 @@ static ssize_t kfetch_read(struct file *filp,
                            loff_t *offset)
 {
     char *kfetch_buf = kmalloc(BUFFER_SIZE, GFP_KERNEL);
-    char *str_temp = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    char **str_temp = kmalloc(KFETCH_NUM_INFO * sizeof(char*), GFP_KERNEL);
     //char kfetch_buf[] = "Test\n";
     size_t len;
     struct sysinfo mem_info;
@@ -143,15 +145,29 @@ static ssize_t kfetch_read(struct file *filp,
     int cpu;                    // to store the cpu id
     struct cpuinfo_x86 *CPU_info;
     s64 uptime;                // signed 64 bits
-    char *logo = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    int info_count;
+    int gap[] = {9, 9, 8, 7, 5, 5};
+    /*char *logo = kmalloc(BUFFER_SIZE, GFP_KERNEL);
     strcpy(logo, "     .-.\n");
     strcat(logo, "    (.. |\n");  
     strcat(logo, "    <>  |\n");
     strcat(logo, "   / --- \\\n");
     strcat(logo, "  ( |   | |\n");
     strcat(logo, " |\\\\_)___/\\)/\\\n");
-    strcat(logo, "<__)------(__/\n");
-
+    strcat(logo, "<__)------(__/\n");*/
+    for(info_count = 0; info_count < KFETCH_NUM_INFO; info_count++){
+        str_temp[info_count] = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+        if (str_temp[info_count] == NULL) {
+            // Handle allocation failure
+            // Free previously allocated memory to avoid memory leaks
+            for (int i = 0; i < info_count; i++) {
+                kfree(str_temp[i]);
+            }
+            kfree(str_temp);
+            
+            return -1;
+        }
+    }
     if(*offset >= BUFFER_SIZE)  // had read to the end of buffer
         return 0;
     
@@ -167,49 +183,34 @@ static ssize_t kfetch_read(struct file *filp,
 
     sprintf(kfetch_buf, "%*s%s\n", 19, " ", utsname()->nodename);
 
-    sprintf(str_temp, "%*s", 9, ".-.");
-    strcat(kfetch_buf, str_temp);
-    sprintf(str_temp, "%*s%s\n", 10, " ", "-------------");
-    strcat(kfetch_buf, str_temp);
+    sprintf(str_temp[0], "%*s", 9, ".-.");
+    strcat(kfetch_buf, str_temp[0]);
+    sprintf(str_temp[0], "%*s%s\n", 10, " ", "-------------");
+    strcat(kfetch_buf, str_temp[0]);
 
     /*if(kfetch_mask & KFETCH_FULL_INFO){
         
     }*/
-    sprintf(str_temp, "%*s", 10, "(.. |");
-    strcat(kfetch_buf, str_temp);
+    info_count = 1;
+
     if(kfetch_mask & KFETCH_RELEASE){
         printk("Kernel: %s\n", utsname()->release);
-        sprintf(str_temp, "%*s%s", 8, " ", utsname()->release);
-        strcat(kfetch_buf, str_temp);
+        sprintf(str_temp[info_count++], "%*s%s", gap[0], " ", utsname()->release);
     }
-    sprintf(str_temp, "\n");
-    strcat(kfetch_buf, str_temp);
 
-    sprintf(str_temp, "%*s", 10, "<>  |");
-    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_NUM_CPUS){
         printk("CPUs: %d / %d\n", num_online_cpus(), num_active_cpus());
-        sprintf(str_temp, "%*sCPUs: %d / %d", 8, " ", num_online_cpus(), num_active_cpus());
-        strcat(kfetch_buf, str_temp);
+        sprintf(str_temp[info_count++], "%*sCPUs: %d / %d", gap[1], " ", num_online_cpus(), num_active_cpus());
     }
-    sprintf(str_temp, "\n");
-    strcat(kfetch_buf, str_temp);
 
-    sprintf(str_temp, "%*s", 11, "/ --- \\");
-    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_CPU_MODEL){
         //for_each_online_cpu(cpu)
         cpu = smp_processor_id(); // obtain CPU number
         CPU_info = &cpu_data(cpu);
         printk("CPU: %s\n", CPU_info->x86_model_id);
-        sprintf(str_temp, "%*sCPU: %s", 8, " ", CPU_info->x86_model_id);
-        strcat(kfetch_buf, str_temp);
+        sprintf(str_temp[info_count++], "%*sCPU: %s", gap[2], " ", CPU_info->x86_model_id);
     }
-    sprintf(str_temp, "\n");
-    strcat(kfetch_buf, str_temp);
 
-    sprintf(str_temp, "%*s", 12, "( |   | |");
-    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_MEM){
         si_meminfo(&mem_info);  // get all kinds of memory usage in pages
         kb_unit = mem_info.mem_unit / 1024; // byte -> KB, can't conver to MB directly since it's the byte of page, which is probably 1024 or 2048. Converting to MB will leads to 0
@@ -217,46 +218,74 @@ static ssize_t kfetch_read(struct file *filp,
         // “free memory” is memory which is literally doing nothing whatever right now. But “available memory” is memory that you can use - but may require the operating system to free something up in order to give it to you
         //printk("Total RAM: %ld MB / %ld MB\n", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
         printk("Total RAM: %ld MB / %ld MB\n", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
-        sprintf(str_temp, "%*sTotal RAM: %ld MB / %ld MB", 8, " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
-        strcat(kfetch_buf, str_temp);
+        sprintf(str_temp[info_count++], "%*sTotal RAM: %ld MB / %ld MB", gap[3], " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
     }
-    sprintf(str_temp, "\n");
-    strcat(kfetch_buf, str_temp);
 
-    sprintf(str_temp, "%*s", 14, "|\\\\_)___/\\)/\\");
-    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_UPTIME){
         uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC); // get the time from booting in ns, convert to seconds
         printk("Uptime: %lld\n", uptime / 60);                             // convert to minutes
-        sprintf(str_temp, "%*sCUptime: %lld", 8, " ", uptime / 60);
-        strcat(kfetch_buf, str_temp);
+        sprintf(str_temp[info_count++], "%*sCPUtime: %lld", gap[4], " ", uptime / 60);
     }
-    sprintf(str_temp, "\n");
-    strcat(kfetch_buf, str_temp);
 
-    sprintf(str_temp, "%*s", 13, "<__)------(__/");
-    strcat(kfetch_buf, str_temp);
     if(kfetch_mask & KFETCH_NUM_PROCS){
         struct task_struct *p, *t;
-        int count = 0;
+        int proc_count = 0;
         //printk("Procs: %d", nr_processes);
         for_each_process_thread(p, t){
-            count++;
+            proc_count++;
         }
-        printk("Procs: %d\n", count);
-        sprintf(str_temp, "%*sProcs: %d", 8, " ", count);
-        strcat(kfetch_buf, str_temp);
+        printk("Procs: %d\n", proc_count);
+        sprintf(str_temp[info_count++], "%*sProcs: %d", gap[5], " ", proc_count);
     }
-    sprintf(str_temp, "\n");
-    strcat(kfetch_buf, str_temp);
 
     mutex_unlock(&RW_mutex);
 
-    printk("%zd\n", len);
+    fill_info(kfetch_buf, str_temp, -1);
+
+    sprintf(str_temp[0], "%*s", 10, "(.. |");
+    strcat(kfetch_buf, str_temp[0]);
+    fill_info(kfetch_buf, str_temp, info_count);
+    //info_count >= 0 ? strcat(kfetch_buf, str_temp[--info_count]) : pass();
+    strcat(kfetch_buf, "\n");
+
+    sprintf(str_temp[0], "%*s", 10, "<>  |");
+    strcat(kfetch_buf, str_temp[0]);
+    fill_info(kfetch_buf, str_temp, info_count);
+    strcat(kfetch_buf, "\n");
+
+    sprintf(str_temp[0], "%*s", 11, "/ --- \\");
+    strcat(kfetch_buf, str_temp[0]);
+    fill_info(kfetch_buf, str_temp, info_count);
+    strcat(kfetch_buf, "\n");
+
+    sprintf(str_temp[0], "%*s", 12, "( |   | |");
+    strcat(kfetch_buf, str_temp[0]);
+    fill_info(kfetch_buf, str_temp, info_count);
+    strcat(kfetch_buf, "\n");
+
+    sprintf(str_temp[0], "%*s", 14, "|\\\\_)___/\\)/\\");
+    strcat(kfetch_buf, str_temp[0]);
+    fill_info(kfetch_buf, str_temp, info_count);
+    strcat(kfetch_buf, "\n");
+
+    sprintf(str_temp[0], "%*s", 13, "<__)------(__/");
+    strcat(kfetch_buf, str_temp[0]);
+    fill_info(kfetch_buf, str_temp, info_count);
+    strcat(kfetch_buf, "\n");
+
+    //printk("%zd\n", len);
+    printk("%d\n", info_count);
+
     if (copy_to_user(buffer, kfetch_buf, strlen(kfetch_buf + 1))) {
         pr_alert("Failed to copy data to user");
         return 0;
     }
+
+    kfree(kfetch_buf);
+    for (int i = 0; i < KFETCH_NUM_INFO; i++) {
+        kfree(str_temp[i]);
+    }
+    kfree(str_temp);
     
     return strlen(kfetch_buf + 1);
     /* cleaning up */
@@ -306,6 +335,19 @@ static ssize_t kfetch_write(struct file *filp,
     mutex_unlock(&RW_mutex);
     return sizeof(kfetch_mask);
 }
+
+void fill_info(char *out_str, char **in_str, int amount){
+    static int rec = 1; // to use it to iterate info in order
+
+    if(amount == -1){ // a new driver invocation
+        rec = 1;
+        return;
+    }
+
+    if(rec < amount && rec < KFETCH_NUM_INFO)
+        strcat(out_str, in_str[rec++]);
+}
+
 
 module_init(kfetch_init); //loading module
 module_exit(kfetch_exit); //removing module)
