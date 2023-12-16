@@ -51,6 +51,7 @@ static int kfetch_release(struct inode *, struct file *);
 static ssize_t kfetch_read(struct file *, char __user *, size_t, loff_t *); 
 static ssize_t kfetch_write(struct file *, const char __user *, size_t, loff_t *); 
 void fill_info(char *out_str, char **in_str, int amount);
+char *get_dash(int len);
 void pass(void){}
 
 // A C99 way of assigning to elements of a structure that makes assigning to this structure more convenient.
@@ -145,8 +146,8 @@ static ssize_t kfetch_read(struct file *filp,
     int cpu;                    // to store the cpu id
     struct cpuinfo_x86 *CPU_info;
     s64 uptime;                // signed 64 bits
-    int info_count;
-    int gap[] = {9, 9, 8, 7, 5, 5};
+    int info_count, gap_count;
+    int gap[] = {19, 9, 10, 9, 9, 8, 7, 5, 5};
     /*char *logo = kmalloc(BUFFER_SIZE, GFP_KERNEL);
     strcpy(logo, "     .-.\n");
     strcat(logo, "    (.. |\n");  
@@ -176,31 +177,28 @@ static ssize_t kfetch_read(struct file *filp,
     else 
         len = sizeof(kfetch_buf);
 
+    info_count = 1;
+    gap_count = 0;
+
     mutex_lock(&RW_mutex);
     /* fetching the information */
     printk("%s\n", utsname()->nodename);
     printk("-------------\n");
 
-    sprintf(kfetch_buf, "%*s%s\n", 19, " ", utsname()->nodename);
+    sprintf(kfetch_buf, "%*s%s\n", gap[gap_count++], " ", utsname()->nodename);
 
-    sprintf(str_temp[0], "%*s", 9, ".-.");
+    sprintf(str_temp[0], "%*s", gap[gap_count++], ".-.");
     strcat(kfetch_buf, str_temp[0]);
-    sprintf(str_temp[0], "%*s%s\n", 10, " ", "-------------");
+    sprintf(str_temp[0], "%*s%s\n", gap[gap_count++], " ", get_dash(strlen(utsname()->nodename)));
     strcat(kfetch_buf, str_temp[0]);
 
     /*if(kfetch_mask & KFETCH_FULL_INFO){
         
     }*/
-    info_count = 1;
 
     if(kfetch_mask & KFETCH_RELEASE){
         printk("Kernel: %s\n", utsname()->release);
-        sprintf(str_temp[info_count++], "%*s%s", gap[0], " ", utsname()->release);
-    }
-
-    if(kfetch_mask & KFETCH_NUM_CPUS){
-        printk("CPUs: %d / %d\n", num_online_cpus(), num_active_cpus());
-        sprintf(str_temp[info_count++], "%*sCPUs: %d / %d", gap[1], " ", num_online_cpus(), num_active_cpus());
+        sprintf(str_temp[info_count++], "%*sKernel:   %s", gap[gap_count++], " ", utsname()->release);
     }
 
     if(kfetch_mask & KFETCH_CPU_MODEL){
@@ -208,7 +206,12 @@ static ssize_t kfetch_read(struct file *filp,
         cpu = smp_processor_id(); // obtain CPU number
         CPU_info = &cpu_data(cpu);
         printk("CPU: %s\n", CPU_info->x86_model_id);
-        sprintf(str_temp[info_count++], "%*sCPU: %s", gap[2], " ", CPU_info->x86_model_id);
+        sprintf(str_temp[info_count++], "%*sCPU:      %s", gap[gap_count++], " ", CPU_info->x86_model_id);
+    }
+
+    if(kfetch_mask & KFETCH_NUM_CPUS){
+        printk("CPUs: %d / %d\n", num_online_cpus(), num_active_cpus());
+        sprintf(str_temp[info_count++], "%*sCPUs:     %d / %d", gap[gap_count++], " ", num_online_cpus(), num_active_cpus());
     }
 
     if(kfetch_mask & KFETCH_MEM){
@@ -218,13 +221,13 @@ static ssize_t kfetch_read(struct file *filp,
         // “free memory” is memory which is literally doing nothing whatever right now. But “available memory” is memory that you can use - but may require the operating system to free something up in order to give it to you
         //printk("Total RAM: %ld MB / %ld MB\n", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
         printk("Total RAM: %ld MB / %ld MB\n", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
-        sprintf(str_temp[info_count++], "%*sTotal RAM: %ld MB / %ld MB", gap[3], " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        sprintf(str_temp[info_count++], "%*sMem:      %ld MB / %ld MB", gap[gap_count++], " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
     }
 
     if(kfetch_mask & KFETCH_UPTIME){
         uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC); // get the time from booting in ns, convert to seconds
         printk("Uptime: %lld\n", uptime / 60);                             // convert to minutes
-        sprintf(str_temp[info_count++], "%*sCPUtime: %lld", gap[4], " ", uptime / 60);
+        sprintf(str_temp[info_count++], "%*sUptime:   %lld", gap[gap_count++], " ", uptime / 60);
     }
 
     if(kfetch_mask & KFETCH_NUM_PROCS){
@@ -235,7 +238,7 @@ static ssize_t kfetch_read(struct file *filp,
             proc_count++;
         }
         printk("Procs: %d\n", proc_count);
-        sprintf(str_temp[info_count++], "%*sProcs: %d", gap[5], " ", proc_count);
+        sprintf(str_temp[info_count++], "%*sProcs:    %d", gap[gap_count++], " ", proc_count);
     }
 
     mutex_unlock(&RW_mutex);
@@ -348,6 +351,16 @@ void fill_info(char *out_str, char **in_str, int amount){
         strcat(out_str, in_str[rec++]);
 }
 
+char *get_dash(int len){
+    char *temp = kmalloc(len + 1, GFP_KERNEL);
+    int i = 0;
+
+    for(; i < len; i++)
+        temp[i] = '-';
+    temp[len] = '\0';
+
+    return temp;
+}
 
 module_init(kfetch_init); //loading module
 module_exit(kfetch_exit); //removing module)
