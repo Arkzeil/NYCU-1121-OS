@@ -28,7 +28,7 @@ static unsigned char kfetch_mask = 0;    // for driver mask that can be used aft
 //struct mutex kfetch_mutex;
 
 static DEFINE_MUTEX(kfetch_mutex);    // define mutex lock gloablly and statically, for single thread
-static DEFINE_MUTEX(RW_mutex);        // define mutex lock gloablly and statically, for Read after write
+//static DEFINE_MUTEX(RW_mutex);        // define mutex lock gloablly and statically, for Read after write
 //static struct semaphore kfetch_semaphore; // define semaphore gloablly and statically, for single thread
 //static struct semaphore RW_semaphore; // define semaphore gloablly and statically, for Read after write
 
@@ -50,9 +50,9 @@ static int kfetch_open(struct inode *, struct file *);
 static int kfetch_release(struct inode *, struct file *); 
 static ssize_t kfetch_read(struct file *, char __user *, size_t, loff_t *); 
 static ssize_t kfetch_write(struct file *, const char __user *, size_t, loff_t *); 
-void fill_info(char *out_str, char **in_str, int amount);
-char *get_dash(int len);
-void pass(void){}
+void fill_info(char *out_str, char **in_str, int amount);   // To make sure that the output of information would keep in specified order
+char *get_dash(int len);                                    // To return a string full of dash based on hostname length
+void pass(void){}                                           // no use
 
 // A C99 way of assigning to elements of a structure that makes assigning to this structure more convenient.
 // C99 help with compatibility compared to GNU
@@ -77,7 +77,7 @@ static int kfetch_init(void){
         return -1;
     }
 
-    major = MAJOR(dev);
+    major = MAJOR(dev);                                    // print out major device number
     printk(KERN_INFO "Device major number: %d\n", major);
 
     cdev_init(&my_dev, &kfetch_ops);         // initialize the data structure struct cdev for our char device and associate it with the device numbers.
@@ -105,19 +105,21 @@ static void kfetch_exit(void){
     if(module_refcount(THIS_MODULE) > 0)
         printk(KERN_ERR "Error: there're still processes using this module\n");
 
-    device_destroy(dev_cls, MKDEV(major, 0)); 
-    class_destroy(dev_cls);
-    unregister_chrdev(major, DEVICE_NAME);
+    device_destroy(dev_cls, MKDEV(major, 0));       // remove a device
+    class_destroy(dev_cls);                         // remove a device class
+    unregister_chrdev(major, DEVICE_NAME);          // unregister(release) device major number
     
     printk(KERN_ALERT "Goodbye, cruel world\n");
 }
 
 static int kfetch_open(struct inode *inode, struct file *file){
+    //if (atomic_cmpxchg(&already_open, CDEV_NOT_USED, CDEV_EXCLUSIVE_OPEN)) // method from reference website
+    //    return -EBUSY; 
     mutex_lock(&kfetch_mutex); //only one process can use this device at a time
     //down(&kfetch_semaphore);  // Acquire semaphore
     // critical section
     // Increment the usage info_count
-    try_module_get(THIS_MODULE);
+    try_module_get(THIS_MODULE);    // Increment the usage info_count
 
     return 0;
 }
@@ -125,6 +127,7 @@ static int kfetch_open(struct inode *inode, struct file *file){
 static int kfetch_release(struct inode *inode, struct file *file){
 
     // end of critical section
+    //atomic_set(&already_open, CDEV_NOT_USED); // method from reference 
     mutex_unlock(&kfetch_mutex);
     //up(&kfetch_semaphore);  // Release semaphore
 
@@ -172,33 +175,32 @@ static ssize_t kfetch_read(struct file *filp,
     if(*offset >= BUFFER_SIZE)  // had read to the end of buffer
         return 0;
     
+    // this part is actually not necessart since the length providede by user is not accurate
     if(length > BUFFER_SIZE - *offset) // read only to the end of buffer
         len = BUFFER_SIZE - *offset;
     else 
         len = sizeof(kfetch_buf);
+    //
 
     info_count = 1;
     gap_count = 0;
 
-    mutex_lock(&RW_mutex);
+    //mutex_lock(&RW_mutex);
     /* fetching the information */
     printk("%s\n", utsname()->nodename);
     printk("-------------\n");
-
+    // get hostname
     sprintf(kfetch_buf, "%*s%s\n", gap[gap_count++], " ", utsname()->nodename);
-
+    // get corresponding length of dash
     sprintf(str_temp[0], "%*s", gap[gap_count++], ".-.");
     strcat(kfetch_buf, str_temp[0]);
     sprintf(str_temp[0], "%*s%s\n", gap[gap_count++], " ", get_dash(strlen(utsname()->nodename)));
     strcat(kfetch_buf, str_temp[0]);
 
-    /*if(kfetch_mask & KFETCH_FULL_INFO){
-        
-    }*/
 
     if(kfetch_mask & KFETCH_RELEASE){
         printk("Kernel: %s\n", utsname()->release);
-        sprintf(str_temp[info_count++], "%*sKernel:   %s", gap[gap_count++], " ", utsname()->release);
+        sprintf(str_temp[info_count++], "%*sKernel:   %s", gap[gap_count++], " ", utsname()->release);  // get kernel release
     }
 
     if(kfetch_mask & KFETCH_CPU_MODEL){
@@ -209,9 +211,9 @@ static ssize_t kfetch_read(struct file *filp,
         sprintf(str_temp[info_count++], "%*sCPU:      %s", gap[gap_count++], " ", CPU_info->x86_model_id);
     }
 
-    if(kfetch_mask & KFETCH_NUM_CPUS){
-        printk("CPUs: %d / %d\n", num_online_cpus(), num_active_cpus());
-        sprintf(str_temp[info_count++], "%*sCPUs:     %d / %d", gap[gap_count++], " ", num_online_cpus(), num_active_cpus());
+    if(kfetch_mask & KFETCH_NUM_CPUS){ // should be present instead of active? Since some cores may not powered on
+        printk("CPUs: %d / %d\n", num_online_cpus(), num_present_cpus());
+        sprintf(str_temp[info_count++], "%*sCPUs:     %d / %d", gap[gap_count++], " ", num_online_cpus(), num_present_cpus());
     }
 
     if(kfetch_mask & KFETCH_MEM){
@@ -221,7 +223,8 @@ static ssize_t kfetch_read(struct file *filp,
         // “free memory” is memory which is literally doing nothing whatever right now. But “available memory” is memory that you can use - but may require the operating system to free something up in order to give it to you
         //printk("Total RAM: %ld MB / %ld MB\n", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
         printk("Total RAM: %ld MB / %ld MB\n", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
-        sprintf(str_temp[info_count++], "%*sMem:      %ld MB / %ld MB", gap[gap_count++], " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        //sprintf(str_temp[info_count++], "%*sMem:      %ld MB / %ld MB", gap[gap_count++], " ", si_mem_available() * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
+        sprintf(str_temp[info_count++], "%*sMem:      %ld MB / %ld MB", gap[gap_count++], " ", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
     }
 
     if(kfetch_mask & KFETCH_UPTIME){
@@ -231,19 +234,23 @@ static ssize_t kfetch_read(struct file *filp,
     }
 
     if(kfetch_mask & KFETCH_NUM_PROCS){
-        struct task_struct *p, *t;
+        struct task_struct *p;
+        //struct task_struct *t;
         int proc_count = 0;
         //printk("Procs: %d", nr_processes);
-        for_each_process_thread(p, t){
+        /*for_each_process_thread(p, t){
+            proc_count++;
+        }*/
+        for_each_process(p){ // should use kprobe to get value of nr_processes, leave this as future work
             proc_count++;
         }
         printk("Procs: %d\n", proc_count);
         sprintf(str_temp[info_count++], "%*sProcs:    %d", gap[gap_count++], " ", proc_count);
     }
 
-    mutex_unlock(&RW_mutex);
+    //mutex_unlock(&RW_mutex);
 
-    fill_info(kfetch_buf, str_temp, -1);
+    fill_info(kfetch_buf, str_temp, -1);    // a new start for fetching information
 
     sprintf(str_temp[0], "%*s", 10, "(.. |");
     strcat(kfetch_buf, str_temp[0]);
@@ -279,19 +286,19 @@ static ssize_t kfetch_read(struct file *filp,
     //printk("%zd\n", len);
     printk("%d\n", info_count);
 
-    if (copy_to_user(buffer, kfetch_buf, strlen(kfetch_buf + 1))) {
+    if (copy_to_user(buffer, kfetch_buf, strlen(kfetch_buf + 1))) { // send data back to user-space
         pr_alert("Failed to copy data to user");
         return 0;
     }
 
-    kfree(kfetch_buf);
+    /* cleaning up */
+    kfree(kfetch_buf);                                              // free 2D array
     for (int i = 0; i < KFETCH_NUM_INFO; i++) {
         kfree(str_temp[i]);
     }
-    kfree(str_temp);
+    kfree(str_temp);                                                // free array
     
-    return strlen(kfetch_buf + 1);
-    /* cleaning up */
+    return strlen(kfetch_buf + 1);                                  // return the length of result string
 }
 
 static ssize_t kfetch_write(struct file *filp,
@@ -311,13 +318,13 @@ static ssize_t kfetch_write(struct file *filp,
 
     kfetch_mask = 0;        // clean mask if there's flag
 
-    mutex_lock(&RW_mutex);  // to ensure write first
+    //mutex_lock(&RW_mutex);  // to ensure write first
     //printk("mask info:%d\n", mask_info);
 
     /* setting the information mask */
     if((mask_info & KFETCH_FULL_INFO) == KFETCH_FULL_INFO){ // don't directly use 'and' to determine since result will not be 0
         kfetch_mask |= KFETCH_FULL_INFO;
-        mutex_unlock(&RW_mutex);
+        //mutex_unlock(&RW_mutex);
         return sizeof(kfetch_mask);
     }
     
@@ -335,11 +342,11 @@ static ssize_t kfetch_write(struct file *filp,
         kfetch_mask |= KFETCH_NUM_PROCS;
     //printk("%d\n", kfetch_mask);
 
-    mutex_unlock(&RW_mutex);
+    //mutex_unlock(&RW_mutex);
     return sizeof(kfetch_mask);
 }
 
-void fill_info(char *out_str, char **in_str, int amount){
+void fill_info(char *out_str, char **in_str, int amount){ // To make sure that the output of information would keep in specified order
     static int rec = 1; // to use it to iterate info in order
 
     if(amount == -1){ // a new driver invocation
@@ -351,7 +358,7 @@ void fill_info(char *out_str, char **in_str, int amount){
         strcat(out_str, in_str[rec++]);
 }
 
-char *get_dash(int len){
+char *get_dash(int len){                            // return a array full of dash based on hostname length
     char *temp = kmalloc(len + 1, GFP_KERNEL);
     int i = 0;
 
