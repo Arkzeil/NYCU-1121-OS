@@ -227,12 +227,6 @@ static ssize_t kfetch_read(struct file *filp,
         sprintf(str_temp[info_count++], "%*sMem:      %ld MB / %ld MB", gap[gap_count++], " ", mem_info.freeram * kb_unit / 1024, mem_info.totalram * kb_unit / 1024);
     }
 
-    if(kfetch_mask & KFETCH_UPTIME){
-        uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC); // get the time from booting in ns, convert to seconds
-        printk("Uptime: %lld\n", uptime / 60);                             // convert to minutes
-        sprintf(str_temp[info_count++], "%*sUptime:   %lld", gap[gap_count++], " ", uptime / 60);
-    }
-
     if(kfetch_mask & KFETCH_NUM_PROCS){
         struct task_struct *p;
         //struct task_struct *t;
@@ -246,6 +240,12 @@ static ssize_t kfetch_read(struct file *filp,
         }
         printk("Procs: %d\n", proc_count);
         sprintf(str_temp[info_count++], "%*sProcs:    %d", gap[gap_count++], " ", proc_count);
+    }
+
+    if(kfetch_mask & KFETCH_UPTIME){
+        uptime = ktime_divns(ktime_get_coarse_boottime(), NSEC_PER_SEC); // get the time from booting in ns, convert to seconds
+        printk("Uptime: %lld\n", uptime / 60);                             // convert to minutes
+        sprintf(str_temp[info_count++], "%*sUptime:   %lld mins", gap[gap_count++], " ", uptime / 60);
     }
 
     //mutex_unlock(&RW_mutex);
